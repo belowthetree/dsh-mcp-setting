@@ -23,22 +23,24 @@ DeepSeek Harness 插件：在「设置」界面管理 DSH 配置文件里的 MCP
 
 ## 安装
 
-### npm 安装（推荐）
+### 快速安装（推荐）
 
-插件已发布到 npm：`dsh-mcp-setting`。在目标 profile（如 `web`）的
-`~/.dsh/profiles/web/package.json` 中：
-
-1. `dependencies` 增加 `"dsh-mcp-setting": "^0.1.0"`；
-2. `dsh.profile.bundles` 数组增加 `"dsh-mcp-setting"`。
-
-然后在 profile 目录安装依赖：
+插件已发布到 npm：`dsh-mcp-setting`。一条命令安装到目标 profile（如 `web`）：
 
 ```sh
-cd ~/.dsh/profiles/web && pnpm install
+pnpm dsh plugin --profile web add dsh-mcp-setting
 ```
 
-重启 DSH 后插件随 bundles 自动装配（包内 `cordis.patch.yml` 自插入插件行），
-浏览器打开设置 → MCP 服务器。
+该命令在 profile 目录执行 `pnpm add`，并自动把声明了 `dsh.bundle` 的
+`dsh-mcp-setting` 加入 `dsh.profile.bundles`。重启 DSH 后插件随 bundles
+自动装配（包内 `cordis.patch.yml` 自插入插件行），浏览器打开设置 →
+MCP 服务器。
+
+移除：
+
+```sh
+pnpm dsh plugin --profile web remove dsh-mcp-setting
+```
 
 ### 本地开发挂载
 
