@@ -1,6 +1,6 @@
 {
   "name": "dsh-mcp-setting",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "DeepSeek Harness 设置界面管理 MCP 服务器：增删改 cordis.patch.yml 中的 @deepseek-ai/dsh-mcp-client 行",
   "type": "module",
   "main": "./lib/index.js",
