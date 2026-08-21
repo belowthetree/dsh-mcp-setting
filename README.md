@@ -66,3 +66,7 @@ pnpm build         # tsc 编译 host + tsdown 打包 client
 - `src/client/` — Client 半边：`settings.section` 槽位注册、fetch 传输、
   React 设置页（zh/en）。
 - `tests/` — 单元测试。
+
+## 协议
+
+本项目以 [MIT License](LICENSE) 发布（Copyright © 2025 belowthetree），详见 [LICENSE](LICENSE) 文件。
