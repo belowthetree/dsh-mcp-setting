@@ -7,8 +7,11 @@
  * compartment, which the renderer binds to `useMcpServers`.
  */
 
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
+// Type-only: pulls the slots Context merge (ctx.slots) through the renderer
+// registry seam.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the settings SlotMap merge (the settings.section seat).
@@ -36,10 +39,12 @@ export interface McpSettingsInjected {
   /** Reserved observable compartment; binds to `useMcpServers` on the component. */
   hooks: { mcpServers: SnapshotStore<McpSettingsState> }
   /**
-   * Re-read the server list from the Host.
+   * Re-read the server list (and their live status) from the Host.
+   * @param silent - keep the current list visible instead of flashing a
+   * loading state; used by the periodic status poll.
    * @returns settlement after the read.
    */
-  reload: () => Promise<void>
+  reload: (silent?: boolean) => Promise<void>
   /**
    * Add one new server to the home patch.
    * @param id - new loader row id.
@@ -60,6 +65,20 @@ export interface McpSettingsInjected {
    * @returns null on success; the Host's failure text otherwise.
    */
   remove: (id: string) => Promise<string | null>
+  /**
+   * Enable or disable one server by writing the row's loader `disabled`
+   * flag; the harness's config watcher hot-applies the change.
+   * @param id - loader row id of the server to toggle.
+   * @param disabled - whether the server should be disabled.
+   * @returns null on success; the Host's failure text otherwise.
+   */
+  setEnabled: (id: string, disabled: boolean) => Promise<string | null>
+  /**
+   * Request a full harness restart (the Host shuts down after answering;
+   * the page should poll until the app responds again, then reload).
+   * @returns null on success; the Host's failure text otherwise.
+   */
+  restart: () => Promise<string | null>
 }
 
 /** Required services: the settings seat's slot registry and the locale runtime. */
@@ -94,10 +113,12 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: (): McpSettingsInjected => ({
       hooks: { mcpServers: controller.store },
-      reload: () => controller.load(),
+      reload: (silent) => controller.load(silent),
       add: (id, draft) => controller.add(id, draft),
       update: (id, draft) => controller.update(id, draft),
       remove: (id) => controller.remove(id),
+      setEnabled: (id, disabled) => controller.setEnabled(id, disabled),
+      restart: () => controller.restart(),
     }),
   }, McpSettingsSection))
 }

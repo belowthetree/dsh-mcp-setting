@@ -80,6 +80,10 @@ export function listRows(doc: Document, file: string, scope: McpServerScope): Mc
       rows.push({
         id,
         name: typeof name === 'string' ? name : MCP_CLIENT_NAME,
+        disabled: row.get('disabled') === true,
+        // File-model rows carry no live state; the Host's route layer replaces
+        // this placeholder with the inferred connection status.
+        status: { state: 'loading', toolCount: 0 },
         config: isRecord(config) ? plainData(config) as Record<string, unknown> : {},
         scope,
         file,
@@ -155,6 +159,20 @@ export function appendMcpEntry(doc: Document, id: string, config: Record<string,
  */
 export function setRowConfig(doc: Document, location: RowLocation, config: Record<string, unknown>): void {
   doc.setIn([location.entryIndex, 'insert', location.rowIndex, 'config'], config)
+}
+
+/**
+ * Set or clear a row's `disabled` loader flag. Disabling writes a plain
+ * `disabled: true` (a previous `!!js` expression is replaced); enabling
+ * removes the key entirely.
+ * @param doc - parsed patch document.
+ * @param location - row address from {@link locateRow}.
+ * @param disabled - whether the row should be disabled.
+ */
+export function setRowDisabled(doc: Document, location: RowLocation, disabled: boolean): void {
+  const path = [location.entryIndex, 'insert', location.rowIndex, 'disabled']
+  if (disabled) doc.setIn(path, true)
+  else doc.deleteIn(path)
 }
 
 /**

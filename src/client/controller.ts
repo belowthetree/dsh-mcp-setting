@@ -6,10 +6,16 @@
  * state.
  */
 
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
-import { SERVERS_ROUTE } from '../types.ts'
-import type { McpApiResponse, McpServerDraft, McpServerView } from '../types.ts'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { API_PREFIX, SERVERS_ROUTE } from '../types.ts'
+import type {
+  McpApiResponse,
+  McpRestartResponse,
+  McpServersResponse,
+  McpServerDraft,
+  McpServerView,
+} from '../types.ts'
 
 /** Snapshot state mirrored from the Host's server list. */
 export interface McpSettingsState {
@@ -33,9 +39,12 @@ function messageOf(error: unknown): string {
  * transport failure throws with the Host's (or a synthesized) message.
  * @param path - absolute API path.
  * @param init - fetch options (method, body).
- * @returns the ok-branch payload.
+ * @returns the ok-branch payload of the expected response shape.
  */
-async function callApi(path: string, init?: RequestInit): Promise<Extract<McpApiResponse, { ok: true }>> {
+async function callApi<T extends McpApiResponse = McpServersResponse>(
+  path: string,
+  init?: RequestInit,
+): Promise<Extract<T, { ok: true }>> {
   let response: Response
   try {
     response = await fetch(path, {
@@ -57,7 +66,7 @@ async function callApi(path: string, init?: RequestInit): Promise<Extract<McpApi
   }
   const envelope = body as McpApiResponse
   if (!envelope.ok) throw new Error(envelope.message)
-  return envelope
+  return envelope as Extract<T, { ok: true }>
 }
 
 /**
@@ -76,11 +85,15 @@ export class McpSettingsController {
   /**
    * Refresh the snapshot from `GET /servers`; a failure keeps the last good
    * state and surfaces the error.
+   * @param silent - keep the current `ready` status instead of flipping to
+   * `loading` (used by periodic status polls so the page does not flash).
    * @returns settlement after the read.
    */
-  async load(): Promise<void> {
+  async load(silent = false): Promise<void> {
     const generation = ++this.generation
-    this.store.update((state) => { state.status = 'loading'; state.error = null })
+    if (!silent || this.store.getSnapshot().status !== 'ready') {
+      this.store.update((state) => { state.status = 'loading'; state.error = null })
+    }
     try {
       const response = await callApi(SERVERS_ROUTE)
       if (generation !== this.generation) return
@@ -147,5 +160,35 @@ export class McpSettingsController {
    */
   remove(id: string): Promise<string | null> {
     return this.mutate({ path: `${SERVERS_ROUTE}/${encodeURIComponent(id)}`, method: 'DELETE' })
+  }
+
+  /**
+   * Enable or disable one server by writing the row's loader `disabled`
+   * flag. The harness's config watcher hot-applies the change; a missing
+   * watcher defers it to the next restart.
+   * @param id - loader row id of the server to toggle.
+   * @param disabled - whether the server should be disabled.
+   * @returns null on success; the Host's failure text otherwise.
+   */
+  setEnabled(id: string, disabled: boolean): Promise<string | null> {
+    return this.mutate({
+      path: `${SERVERS_ROUTE}/${encodeURIComponent(id)}/disabled`,
+      method: 'PUT',
+      body: JSON.stringify({ disabled }),
+    })
+  }
+
+  /**
+   * Request a full harness restart. Unlike the list mutations there is no
+   * reload afterwards: the Host answers, then shuts the process down.
+   * @returns null on success; the Host's failure text otherwise.
+   */
+  async restart(): Promise<string | null> {
+    try {
+      await callApi<McpRestartResponse>(`${API_PREFIX}/restart`, { method: 'POST' })
+    } catch (error) {
+      return messageOf(error)
+    }
+    return null
   }
 }

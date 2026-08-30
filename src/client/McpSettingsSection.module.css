@@ -12,6 +12,12 @@
   gap: 12px;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .title {
   margin: 0;
   font-size: 16px;
@@ -198,11 +204,74 @@
   border-radius: 8px;
 }
 
+.rowDisabled {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-border, rgba(128, 128, 128, 0.25));
+  border-radius: 8px;
+  opacity: 0.55;
+}
+
 .rowMain {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Switch: a visually hidden checkbox driving a track + thumb pair. */
+.switchWrap {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.switchInput {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.switchTrack {
+  position: relative;
+  width: 34px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--dsw-border, rgba(128, 128, 128, 0.35));
+  transition: background 0.15s;
+  flex: none;
+}
+
+.switchThumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.switchInput:checked + .switchTrack {
+  background: var(--dsw-accent, #4f8cff);
+}
+
+.switchInput:checked + .switchTrack .switchThumb {
+  transform: translateX(16px);
+}
+
+.switchInput:disabled + .switchTrack {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.switchInput:focus-visible + .switchTrack {
+  outline: 2px solid var(--dsw-accent, #4f8cff);
+  outline-offset: 2px;
 }
 
 .rowName {
@@ -225,7 +294,9 @@
 }
 
 .badgeHome,
-.badgeProfile {
+.badgeProfile,
+.badgeDisabled,
+.statusBadge {
   font-size: 11px;
   padding: 2px 8px;
   border-radius: 999px;
@@ -237,6 +308,44 @@
 
 .badgeProfile {
   background: rgba(229, 72, 77, 0.12);
+}
+
+.badgeDisabled {
+  background: var(--dsw-border, rgba(128, 128, 128, 0.2));
+  opacity: 0.9;
+}
+
+/* Connection-status badges: colored dot + label, tinted by state. */
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.statusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.statusConnected {
+  background: rgba(48, 164, 108, 0.14);
+  color: var(--dsw-ok, #30a46c);
+}
+
+.statusDisconnected,
+.statusFailed {
+  background: rgba(229, 72, 77, 0.12);
+  color: var(--dsw-danger, #e5484d);
+}
+
+.statusLoading,
+.statusUnloaded,
+.statusDisabled {
+  background: var(--dsw-border, rgba(128, 128, 128, 0.2));
+  color: var(--dsw-alias-label-secondary, rgba(128, 128, 128, 0.9));
 }
 
 .rowSummary {

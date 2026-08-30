@@ -31,7 +31,8 @@ vi.mock('@deepseek-ai/dsh-client-runtime/client', () => {
 })
 
 const serverA: McpServerView = {
-  id: 'mcp-a', name: '@deepseek-ai/dsh-mcp-client',
+  id: 'mcp-a', name: '@deepseek-ai/dsh-mcp-client', disabled: false,
+  status: { state: 'connected', toolCount: 2 },
   config: { transport: 'stdio', serverName: 'a', command: 'python', args: [] },
   scope: 'home', file: 'C:/dsh/cordis.patch.yml',
 }
@@ -93,6 +94,15 @@ describe('McpSettingsController', () => {
     expect(controller.store.getSnapshot().status).toBe('error')
   })
 
+  it('silent load keeps the ready status instead of flashing loading', async () => {
+    vi.mocked(fetch).mockResolvedValue(jsonResponse(LIST_RESPONSE))
+    const controller = new McpSettingsController()
+    await controller.load()
+    expect(controller.store.getSnapshot().status).toBe('ready')
+    await controller.load(true)
+    expect(controller.store.getSnapshot().status).toBe('ready')
+  })
+
   it('add returns null on success and reloads the list', async () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock
@@ -130,5 +140,48 @@ describe('McpSettingsController', () => {
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/dsh-mcp-setting/api/servers/mcp-a')
     expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'DELETE' })
     expect(controller.store.getSnapshot().servers).toEqual([])
+  })
+
+  it('setEnabled PUTs the disabled flag against the item route and reloads', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ ok: true }))
+      .mockResolvedValueOnce(jsonResponse({ ...LIST_RESPONSE, servers: [{ ...serverA, disabled: true }] }))
+    const controller = new McpSettingsController()
+    const failure = await controller.setEnabled('mcp-a', true)
+    expect(failure).toBeNull()
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/dsh-mcp-setting/api/servers/mcp-a/disabled')
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' })
+    expect(JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string)).toEqual({ disabled: true })
+    expect(controller.store.getSnapshot().servers[0]?.disabled).toBe(true)
+  })
+
+  it('setEnabled returns the Host failure text and reloads', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse({ ok: false, code: 'NOT_FOUND', message: '服务器「mcp-a」不存在' }))
+      .mockResolvedValueOnce(jsonResponse(LIST_RESPONSE))
+    const controller = new McpSettingsController()
+    const failure = await controller.setEnabled('mcp-a', false)
+    expect(failure).toBe('服务器「mcp-a」不存在')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('restart POSTs the restart route without reloading the list', async () => {
+    const fetchMock = vi.mocked(fetch)
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ok: true }))
+    const controller = new McpSettingsController()
+    const failure = await controller.restart()
+    expect(failure).toBeNull()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/dsh-mcp-setting/api/restart')
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+  })
+
+  it('restart returns the Host failure text when refused', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({ ok: false, code: 'FORBIDDEN', message: '仅允许本机访问' }))
+    const controller = new McpSettingsController()
+    const failure = await controller.restart()
+    expect(failure).toBe('仅允许本机访问')
   })
 })

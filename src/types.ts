@@ -16,12 +16,48 @@ export type McpTransport = 'stdio' | 'streamable-http'
 /** Where one server row lives: the home patch or one profile's patch. */
 export type McpServerScope = 'home' | `profile:${string}`
 
+/**
+ * Live connection state of one MCP server row, inferred by the Host from the
+ * loader entry (fiber) and the tool registry. Exactness limits: a row in a
+ * non-active profile never mounts (`unloaded`), and a dropped connection keeps
+ * its tools registered during the reconnect backoff, so `connected` can lag a
+ * real outage by the backoff window.
+ */
+export type McpServerState =
+  /** Row disabled in the patch file (toggle off). */
+  | 'disabled'
+  /** No live loader entry yet (just added, config hot-reload pending). */
+  | 'loading'
+  /** Loader entry exists but its fiber failed to activate. */
+  | 'failed'
+  /** Row lives in a profile that is not the running profile. */
+  | 'unloaded'
+  /** Fiber is live and the server's tools are registered. */
+  | 'connected'
+  /** Fiber is live but no tools are registered (connecting or down). */
+  | 'disconnected'
+
+/** Live status of one server row, attached to every list entry. */
+export interface McpServerStatus {
+  state: McpServerState
+  /** Tools currently registered under the server's `mcp__<serverName>__` namespace. */
+  toolCount: number
+}
+
 /** One managed server row as the settings page lists it. */
 export interface McpServerView {
   /** Loader row id (`mcp-<name>`), unique across every scanned patch file. */
   id: string
   /** Plugin package name of the row (always the mcp-client package). */
   name: string
+  /**
+   * Whether the row is disabled. Plain `disabled: true` rows are disabled; a
+   * `!!js` disabled expression (which only the Loader can evaluate) counts as
+   * enabled here, and toggling replaces it with a plain boolean.
+   */
+  disabled: boolean
+  /** Live connection status inferred by the Host. */
+  status: McpServerStatus
   /** Raw stored row config (JSON-safe; unknown keys preserved on update). */
   config: Record<string, unknown>
   /** Patch file this row lives in. */
@@ -55,6 +91,11 @@ export interface McpServersResponse {
   servers: McpServerView[]
 }
 
+/** POST /restart success payload (the Host shuts down right after answering). */
+export interface McpRestartResponse {
+  ok: true
+}
+
 /** Failure envelope shared by every endpoint. */
 export interface McpErrorResponse {
   ok: false
@@ -65,4 +106,4 @@ export interface McpErrorResponse {
 }
 
 /** Union of every API response body. */
-export type McpApiResponse = McpServersResponse | McpErrorResponse
+export type McpApiResponse = McpServersResponse | McpRestartResponse | McpErrorResponse

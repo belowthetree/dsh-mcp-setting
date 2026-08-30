@@ -10,6 +10,7 @@ import {
   removeRow,
   serializePatch,
   setRowConfig,
+  setRowDisabled,
 } from '../src/patch-editor.ts'
 import type { McpServerDraft } from '../src/types.ts'
 
@@ -67,6 +68,23 @@ describe('listRows', () => {
     expect(listRows(openPatchDocument(''), HOME, 'home')).toEqual([])
   })
 
+  it('surfaces plain disabled rows and treats js-expression disabled as enabled', () => {
+    const doc = openPatchDocument([
+      '- insert:',
+      '    - id: mcp-off',
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      '      disabled: true',
+      '      config: {transport: stdio, serverName: off, command: python}',
+      '    - id: mcp-expr',
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      '      disabled: !!js process.platform === "win32"',
+      '      config: {transport: stdio, serverName: expr, command: python}',
+    ].join('\n'))
+    const rows = listRows(doc, HOME, 'home')
+    expect(rows.find(row => row.id === 'mcp-off')?.disabled).toBe(true)
+    expect(rows.find(row => row.id === 'mcp-expr')?.disabled).toBe(false)
+  })
+
   it('throws with a message on invalid YAML', () => {
     expect(() => openPatchDocument('- insert: [unclosed')).toThrow(/不是合法 YAML/)
   })
@@ -107,6 +125,36 @@ describe('setRowConfig', () => {
     const rows = listRows(openPatchDocument(text), HOME, 'home')
     expect(rows[0]?.config).toEqual({ transport: 'stdio', serverName: 'a', command: 'python', args: ['b.py'] })
     expect(rows[1]?.id).toBe('mcp-b')
+  })
+})
+
+describe('setRowDisabled', () => {
+  it('writes disabled: true and surfaces it through listRows', () => {
+    const doc = openPatchDocument(SAMPLE_PATCH)
+    const location = locateRow(doc, 'mcp-a')
+    expect(location).toBeDefined()
+    setRowDisabled(doc, location!, true)
+    const text = serializePatch(doc)
+    expect(text).toContain('disabled: true')
+    const rows = listRows(openPatchDocument(text), HOME, 'home')
+    expect(rows.find(row => row.id === 'mcp-a')?.disabled).toBe(true)
+    expect(rows.find(row => row.id === 'mcp-b')?.disabled).toBe(false)
+  })
+
+  it('removes the disabled key when re-enabling', () => {
+    const doc = openPatchDocument([
+      '- insert:',
+      '    - id: mcp-a',
+      "      name: '@deepseek-ai/dsh-mcp-client'",
+      '      disabled: true',
+      '      config: {transport: stdio, serverName: a, command: python}',
+    ].join('\n'))
+    const location = locateRow(doc, 'mcp-a')
+    expect(location).toBeDefined()
+    setRowDisabled(doc, location!, false)
+    const text = serializePatch(doc)
+    expect(text).not.toContain('disabled')
+    expect(listRows(openPatchDocument(text), HOME, 'home')[0]?.disabled).toBe(false)
   })
 })
 

@@ -15,6 +15,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { spawn } from 'node:child_process'
 import { copyFile, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -26,6 +27,7 @@ import type { Document } from 'yaml'
 import { API_PREFIX, SERVERS_ROUTE } from './types.ts'
 import type { McpApiResponse, McpServerDraft, McpServerScope, McpServerView } from './types.ts'
 import {
+  MCP_CLIENT_ALIAS,
   MCP_CLIENT_NAME,
   SERVER_ID_PATTERN,
   appendMcpEntry,
@@ -37,7 +39,9 @@ import {
   removeRow,
   serializePatch,
   setRowConfig,
+  setRowDisabled,
 } from './patch-editor.ts'
+import { inferServerStatus, type LoaderEntryProbe } from './status.ts'
 
 export const name = 'dsh-mcp-setting'
 /** The web server carries every API route; nothing else is required. */
@@ -112,6 +116,55 @@ function asValidationError(error: unknown): RouteError {
   return new RouteError(400, 'INVALID_CONFIG', message)
 }
 
+/** Grace before the relauncher starts polling for the parent's exit. */
+const RELAUNCH_GRACE_MS = 1_000
+/** Poll interval the relauncher uses to detect the parent's exit. */
+const RELAUNCH_POLL_MS = 250
+/** Give up waiting for the parent and start anyway after this long. */
+const RELAUNCH_MAX_WAIT_MS = 20_000
+
+/**
+ * Arm a detached relauncher that re-runs this process's own command line once
+ * the current process has exited (or the wait budget is exhausted), then
+ * request a graceful shutdown so the relaunch happens after the tree and the
+ * web server are fully released. The relauncher inherits the console, so the
+ * relaunched app keeps the same terminal attached on Windows; `unref()` lets
+ * the parent exit without waiting for it.
+ * @param ctx - plugin context carrying the launcher's bounded exit request.
+ */
+function armRelaunch(ctx: Context): void {
+  const helper = [
+    "const { spawn } = require('node:child_process')",
+    'const argv = process.argv.slice(1)',
+    'const ppid = process.ppid',
+    `const deadline = Date.now() + ${RELAUNCH_MAX_WAIT_MS}`,
+    'const gone = () => { try { process.kill(ppid, 0) } catch { return true } return false }',
+    'const boot = () => {',
+    '  const child = spawn(process.execPath, argv, { stdio: \'inherit\' })',
+    "  child.on('exit', (code) => process.exit(typeof code === 'number' ? code : 1))",
+    "  child.on('error', (error) => { console.error('dsh-mcp-setting: relaunch failed:', error); process.exit(1) })",
+    '}',
+    `const wait = () => { if (gone() || Date.now() > deadline) return boot(); setTimeout(wait, ${RELAUNCH_POLL_MS}) }`,
+    `setTimeout(wait, ${RELAUNCH_GRACE_MS})`,
+  ].join('\n')
+  // With `-e`, every argument after the script lands in the helper's argv, so
+  // the helper sees the parent's own argv verbatim and relaunches the same
+  // invocation (`node <script> ...`, pnpm shims, tsx, ...).
+  const relauncher = spawn(process.execPath, ['-e', helper, ...process.argv.slice(1)], {
+    detached: true,
+    stdio: 'inherit',
+    windowsHide: false,
+  })
+  relauncher.unref()
+  const exit = (ctx as unknown as { appExit?: (code: number) => void }).appExit
+  setTimeout(() => {
+    // The bounded launcher shutdown disposes the tree and exits; a direct
+    // fallback for hosts that did not provide `appExit`.
+    if (exit !== undefined) exit(0)
+    else process.exit(0)
+  }, 300)
+}
+
 /**
  * Mount the dsh-mcp-setting API. Registers one prefix route and owns every
  * handler; the returned fiber disposer removes the route.
@@ -158,6 +211,46 @@ export function apply(ctx: Context, config: Config): void {
     return text === undefined ? undefined : openPatchDocument(text)
   }
 
+  /** Structural loader surface (the loader service type is not a dependency). */
+  interface LoaderServiceProbe {
+    entries?: () => Iterable<LoaderEntryProbe>
+  }
+  /** Structural tools surface: the registry's visible schema list. */
+  interface ToolsServiceProbe {
+    schemas?: () => Array<{ name: string }>
+  }
+
+  /**
+   * Snapshot the live facts the status inference reads: every mounted
+   * mcp-client loader entry by row id, and every currently registered tool
+   * name. Both services are core harness fixtures; a missing one degrades the
+   * per-row status to the file-only view. `ctx.get` (not the property proxy)
+   * is used so the probe needs no inject declaration and stays optional.
+   */
+  function collectLiveState(ctx: Context): { entries: Map<string, LoaderEntryProbe>; tools: Set<string> } {
+    const entries = new Map<string, LoaderEntryProbe>()
+    const getService = (key: string): unknown => (ctx as unknown as { get?: (key: string) => unknown }).get?.(key)
+    const loader = getService('loader') as LoaderServiceProbe | undefined
+    if (loader?.entries !== undefined) {
+      for (const entry of loader.entries()) {
+        const name = entry?.options?.name
+        if (name !== MCP_CLIENT_NAME && name !== MCP_CLIENT_ALIAS) continue
+        const id = entry?.options?.id
+        if (typeof id === 'string') entries.set(id, entry)
+      }
+    }
+    const tools = new Set<string>()
+    const service = getService('tools') as ToolsServiceProbe | undefined
+    try {
+      for (const schema of service?.schemas?.() ?? []) {
+        if (typeof schema?.name === 'string') tools.add(schema.name)
+      }
+    } catch {
+      // Registry read failed; the status inference falls back to fiber-only.
+    }
+    return { entries, tools }
+  }
+
   /** Every MCP row across all targets, in target order. */
   async function collectServers(): Promise<McpServerView[]> {
     const servers: McpServerView[] = []
@@ -165,6 +258,10 @@ export function apply(ctx: Context, config: Config): void {
       const doc = await readTarget(target)
       if (doc === undefined) continue
       servers.push(...listRows(doc, target.file, target.scope))
+    }
+    const live = collectLiveState(ctx)
+    for (const server of servers) {
+      server.status = inferServerStatus(server, live.entries.get(server.id), live.tools)
     }
     return servers
   }
@@ -280,10 +377,19 @@ export function apply(ctx: Context, config: Config): void {
       const rest = pathname.slice(API_PREFIX.length)
       const collection = rest === '/servers' || rest === '/servers/'
       const itemMatch = rest.match(/^\/servers\/([A-Za-z0-9_-]+)$/)
+      const disabledMatch = rest.match(/^\/servers\/([A-Za-z0-9_-]+)\/disabled$/)
 
       if (req.method === 'GET' && collection) {
         const servers = await collectServers()
         sendJson(res, 200, { ok: true, homeFile: homeTarget.file, servers })
+        return
+      }
+
+      if (req.method === 'POST' && rest === '/restart') {
+        // Relaunch runs in a detached helper that waits for this process to
+        // release the ports, so the response can flush before the exit.
+        armRelaunch(ctx)
+        sendJson(res, 200, { ok: true })
         return
       }
 
@@ -310,6 +416,24 @@ export function apply(ctx: Context, config: Config): void {
         const doc = openPatchDocument(text ?? '[]')
         appendMcpEntry(doc, id, config)
         await (writeChain = writeChain.then(() => writeTarget(homeTarget, doc, existed)))
+        sendJson(res, 200, { ok: true, homeFile: homeTarget.file, servers: await collectServers() })
+        return
+      }
+
+      if (disabledMatch !== null && req.method === 'PUT') {
+        const id = disabledMatch[1] ?? ''
+        const located = await locateServer(id)
+        if (located === undefined) {
+          sendJson(res, 404, { ok: false, code: 'NOT_FOUND', message: `服务器「${id}」不存在` })
+          return
+        }
+        const body = await readJsonBody(req)
+        if (typeof body['disabled'] !== 'boolean') {
+          throw new RouteError(400, 'INVALID_FIELD', 'disabled 必须是布尔值')
+        }
+        const { target, doc } = located
+        setRowDisabled(doc, { entryIndex: located.entryIndex, rowIndex: located.rowIndex }, body['disabled'])
+        await (writeChain = writeChain.then(() => writeTarget(target, doc, true)))
         sendJson(res, 200, { ok: true, homeFile: homeTarget.file, servers: await collectServers() })
         return
       }
