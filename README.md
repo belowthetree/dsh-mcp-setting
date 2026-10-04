@@ -32,20 +32,48 @@ DeepSeek Harness 插件：在「设置」界面管理 DSH 配置文件里的 MCP
 
 ## 兼容性
 
-当前版本面向 **DSH 0.2.0-rc.2**：`@deepseek-ai/dsh-*` 的 peer 依赖统一声明为
-`^0.2.0-rc.2`（这些包在 npm 上以 `next` dist-tag 发布，`latest` 仍停在旧发布线）。
+当前版本面向 **DSH 0.2.0-rc.2**（npm 上的 `next` 发布线，也是桌面版当前运行的版本；
+peer 依赖统一声明为 `^0.2.0-rc.2`）：
 
-DSH 会拒绝安装或激活 DSH peer 依赖不满足当前运行版本的插件，并提示
-「……与 DSH x.y.z 不兼容（要求 …），运行它可能导致崩溃或数据丢失」。判定逻辑在
+| 依赖 | 声明 | 说明 |
+| --- | --- | --- |
+| `@deepseek-ai/dsh-*` | `^0.2.0-rc.2` | 随 DSH 发布线同步升级 |
+| `@deepseek-ai/cordis` | `^4.0.4` | 0.2.0-rc.2 的 DSH 包要求 `~4.0.4` |
+| `@deepseek-ai/schemastery` | `^3.18.4` | 同上，避免与宿主内的 schema 版本漂移 |
+
+DSH 会拒绝安装或激活 DSH peer 依赖不满足当前运行版本的插件，并提示「……与 DSH x.y.z
+不兼容（要求 …），运行它可能导致崩溃或数据丢失」。判定逻辑在
 `@deepseek-ai/dsh-app-boot` 的 `evaluatePluginCompatibility`：逐个检查
 `@deepseek-ai/dsh` / `@deepseek-ai/dsh-*` 形式的 peer 依赖，任一
-`semver.satisfies(运行时版本, 区间, { includePrerelease: true })` 为假即拒绝
-（0.1.3 声明的 `^0.1.2-alpha.1` 不接受任何 0.2.x 运行时，因此在 DSH 0.2.0-rc.2
-上被拒绝）。**升级 DSH 后必须同步把本插件的 peer 区间改到同一发布线并重新发布。**
+`semver.satisfies(运行时版本, 区间, { includePrerelease: true })` 为假即拒绝；
+运行时版本取自 app-boot 包自身的 `package.json`。因此 0.1.3 声明的
+`^0.1.2-alpha.1` 不接受任何 0.2.x 运行时，在 DSH 0.2.0-rc.2 上会被拒绝。
+**升级 DSH 后必须同步把本插件的 peer 区间改到同一发布线并重新发布。**
 
-`pnpm test` 中的 `tests/compatibility.spec.ts` 用与 DSH 相同的判定复核
-`package.json` 的 peer 声明，并校验 `dsh.client.inject` 中的每个 DSH 客户端包都有
-对应的 peer 声明，避免同类不兼容再次漏到用户侧。
+### 兼容性由三道检查守住
+
+```sh
+pnpm test          # tests/compatibility.spec.ts：用与 DSH 相同的判定复核 peer 声明
+pnpm typecheck     # 对着 node_modules 中真实的 0.2.0-rc.2 类型编译 src/
+pnpm smoke         # 真实 src/index.ts + 临时 DSH home，端到端跑一遍 API 路由
+pnpm smoke:client  # 真实 lib/client.js 走 __ModuleLoader__，核对平台模块表
+```
+
+- `tests/compatibility.spec.ts` 用与 DSH 相同的判定复核 `package.json` 的 peer
+  声明，并校验 `dsh.client.inject` 中的每个 DSH 客户端包都有对应的 peer 声明，
+  避免同类不兼容再次漏到用户侧。
+- `pnpm smoke` 导入真实的 `src/index.ts`，在一个临时 `$DSH_HOME` 上跑通
+  列表 / 新增 / 编辑 / 开关 / 删除 / 回环校验，覆盖 `ctx.webServer.register`、
+  `ctx.effect`、`resolveDshHome` 等 0.2.0-rc.2 接口。
+- `pnpm smoke:client` 在 Node 中执行构建产物 `lib/client.js`，断言它只从
+  **平台模块表**（`react`、`react/jsx-runtime`、`@deepseek-ai/dsh-client-store`）
+  取模块，并按 0.2.0-rc.2 的 `slots` / `locale` 契约注册设置页。
+
+> 依赖安装有一条容易踩的坑：本仓库旁边若有 `deepseek-harness` 检出，pnpm 默认会把
+> `@deepseek-ai/*` 链接到那份**本地工作区**，于是 `typecheck` 与 `test` 实际校验的
+> 是另一条发布线（例如 0.1.7-rc.1）而不自知。仓库根的 `.npmrc` 用
+> `link-workspace-packages=false` 关掉了这个行为，`auto-install-peers=false`
+> 则避免为 peer 再装一份未钉版本的副本。
 
 ## 安装
 
@@ -68,6 +96,16 @@ MCP 服务器。
 pnpm dsh plugin --profile web remove dsh-mcp-setting
 ```
 
+> 从旧版本升级：0.1.3 及更早的版本把 peer 区间声明为 `^0.1.2-alpha.1`，在 DSH 0.2.x
+> 上会被判定为不兼容而拒绝激活。0.1.4 已修好区间；0.1.5 进一步对齐了 cordis 与
+> schemastery 的宿主版本。发布后在目标 profile 执行：
+>
+> ```sh
+> pnpm dsh plugin --profile web add dsh-mcp-setting@^0.1.5
+> ```
+>
+> 重启 DSH 后生效；`~/.dsh/profiles/<name>/package.json` 中的版本号应变为 0.1.5。
+
 ### 本地开发挂载
 
 ```sh
@@ -81,8 +119,10 @@ pnpm install && pnpm build          # 编译 lib/
 
 ```sh
 pnpm test          # vitest（patch-editor 纯逻辑 + controller fetch 桩 + DSH 兼容性契约）
-pnpm typecheck
+pnpm typecheck     # tsc，对着 node_modules 中真实的 DSH 0.2.0-rc.2 类型
 pnpm build         # tsc 编译 host + tsdown 打包 client
+pnpm smoke         # 真实 Host 半边 + 临时 DSH home，跑通 API 路由
+pnpm smoke:client  # 真实 client 产物，走 __ModuleLoader__ 载入（需先 pnpm build）
 ```
 
 ## 结构
@@ -91,7 +131,9 @@ pnpm build         # tsc 编译 host + tsdown 打包 client
 - `src/patch-editor.ts` — 纯函数：patch 文档的增删改查与配置校验（可单测）。
 - `src/client/` — Client 半边：`settings.section` 槽位注册、fetch 传输、
   React 设置页（zh/en）。
-- `tests/` — 单元测试。
+- `tests/` — 单元测试（纯逻辑与契约，不导入插件主体）。
+- `scripts/` — 冒烟脚本：`smoke-host.spec.ts` 用桩上下文跑真实 Host 半边，
+  `smoke-client.mjs` 在 Node 中执行构建后的 client 产物。
 
 ## 协议
 
